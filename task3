@@ -21,6 +21,9 @@
     plt.tight_layout()
     plt.savefig('training_history.png')
     plt.show()
+
+final_acc = evaluate(model, testloader, torch.device("cuda:0" if torch.cuda.is_available() else "cpu"))
+print(f"最终测试准确率: {final_acc:.2f}%")
 最终正确率：dog 37%,deer 29%,ship 27%,plane 25%,bird 21%,car 20%,horse 19%,,forg 17%,truck 14%,cat 13%.
 问2：*内存溢出：简化模型，减少分支和模型参数输入。*维度不匹配：计算错误，print(x.shape)，重新计算展平维度。
 问3：def show_predictions(model, testloader, classes, num_images=10):
