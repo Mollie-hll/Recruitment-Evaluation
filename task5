@@ -1,0 +1,96 @@
+1.U-Net分割网络：
+class DoubleConv(nn.Module):
+    def __init__(self, in_channels, out_channels):
+        super(DoubleConv, self).__init__()
+        self.conv = nn.Sequential(
+            nn.Conv2d(in_channels, out_channels, 3, padding=1),
+            nn.BatchNorm2d(out_channels),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(out_channels, out_channels, 3, padding=1),
+            nn.BatchNorm2d(out_channels),
+            nn.ReLU(inplace=True)
+        )
+    def forward(self, x):
+        return self.conv(x)
+
+class UNet(nn.Module):
+    def __init__(self, in_channels=3, num_classes=21, features=[64, 128, 256, 512]):
+        super(UNet, self).__init__()
+
+        self.encoder1 = DoubleConv(in_channels, features[0])
+        self.encoder2 = DoubleConv(features[0], features[1])
+        self.encoder3 = DoubleConv(features[1], features[2])
+        self.encoder4 = DoubleConv(features[2], features[3])
+        
+        self.pool = nn.MaxPool2d(kernel_size=2, stride=2)
+
+        self.bottleneck = DoubleConv(features[3], features[3] * 2)
+ 
+        self.up4 = nn.ConvTranspose2d(features[3] * 2, features[3], kernel_size=2, stride=2)
+        self.decoder4 = DoubleConv(features[3] * 2, features[3])
+        
+        self.up3 = nn.ConvTranspose2d(features[3], features[2], kernel_size=2, stride=2)
+        self.decoder3 = DoubleConv(features[2] * 2, features[2])
+        
+        self.up2 = nn.ConvTranspose2d(features[2], features[1], kernel_size=2, stride=2)
+        self.decoder2 = DoubleConv(features[1] * 2, features[1])
+        
+        self.up1 = nn.ConvTranspose2d(features[1], features[0], kernel_size=2, stride=2)
+        self.decoder1 = DoubleConv(features[0] * 2, features[0])
+
+        self.final_conv = nn.Conv2d(features[0], num_classes, kernel_size=1)
+    
+    def forward(self, x):
+        e1 = self.encoder1(x)          
+        e2 = self.encoder2(self.pool(e1))  
+        e3 = self.encoder3(self.pool(e2))  
+        e4 = self.encoder4(self.pool(e3))  
+
+        b = self.bottleneck(self.pool(e4))  
+
+        d4 = self.up4(b)                     
+        d4 = torch.cat((d4, e4), dim=1)      
+        d4 = self.decoder4(d4)
+        
+        d3 = self.up3(d4)                    
+        d3 = torch.cat((d3, e3), dim=1)      
+        d3 = self.decoder3(d3)
+        
+        d2 = self.up2(d3)                    
+        d2 = torch.cat((d2, e2), dim=1)      
+        d2 = self.decoder2(d2)
+        
+        d1 = self.up1(d2)                    
+        d1 = torch.cat((d1, e1), dim=1)      
+        d1 = self.decoder1(d1)
+        
+        out = self.final_conv(d1)
+        return out
+2.可视化：
+def main():
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    print(f"使用设备: {device}")
+
+    model = get_mask_rcnn_model().to(device)
+    
+    test_images = [
+        'test_image1.jpg',  
+        'test_image2.jpg',
+        'test_image3.jpg'
+    ]
+    for i, img_path in enumerate(test_images[:1]):  # 先测试一张
+        print(f"\n处理图片: {img_path}")
+        result = predict_image(model, img_path, confidence_threshold=0.5)
+        
+        print(f"检测到 {len(result['boxes'])} 个物体:")
+        for label, score in zip(result['labels'], result['scores']):
+            print(f"  - {COCO_CLASSES[label-1]}: {score:.3f}")
+
+    result = predict_image(model, test_images[0])
+    interactive_visualization(result)
+
+if __name__ == '__main__':
+    main()
+3.区别：Lable只能辨别一个标签，而Mask能辨别多标签。
+4.*一开始大部分图片主体过于突出，难度低且背景分割精度低；查找到使用加权损失来解决。
+  *内存溢出：减小图片尺寸。
