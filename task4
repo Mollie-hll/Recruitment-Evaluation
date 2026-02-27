@@ -1,2 +1,127 @@
-1.
-2.
+1.使用不同命令提高正确率：RandomCrop，提供"不完整"的图片；RandomHorizontalFlip，图片左右翻转=增加镜像样本；ColorJitter，稍微改变颜色，模拟不同光线条件。
+2.预热：
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torch.optim.lr_scheduler import _LRScheduler
+import matplotlib.pyplot as plt
+
+class WarmupScheduler(_LRScheduler):
+    def __init__(self, optimizer, warmup_epochs, initial_lr, max_lr, last_epoch=-1):
+        self.warmup_epochs = warmup_epochs
+        self.initial_lr = initial_lr
+        self.max_lr = max_lr
+        super(WarmupScheduler, self).__init__(optimizer, last_epoch)
+    
+    def get_lr(self):
+        if self.last_epoch < self.warmup_epochs:
+            alpha = self.last_epoch / self.warmup_epochs
+            return [self.initial_lr + (self.max_lr - self.initial_lr) * alpha 
+                    for _ in self.base_lrs]
+        else:
+            return [self.max_lr for _ in self.base_lrs]
+
+3.数据混合：
+import numpy as np
+import torch.nn.functional as F
+
+def mixup_data(x, y, alpha=1.0):
+    if alpha > 0:
+        lam = np.random.beta(alpha, alpha)
+    else:
+        lam = 1
+    
+    batch_size = x.size()[0]
+
+    index = torch.randperm(batch_size).to(x.device)
+
+    mixed_x = lam * x + (1 - lam) * x[index]
+
+    y_a, y_b = y, y[index]
+    
+    return mixed_x, y_a, y_b, lam
+
+def mixup_criterion(criterion, pred, y_a, y_b, lam):
+    return lam * criterion(pred, y_a) + (1 - lam) * criterion(pred, y_b)
+4.对比：可视化对比
+def plot_comparison(experiments):
+    fig, axes = plt.subplots(2, 2, figsize=(15, 10))
+    
+    colors = ['blue', 'orange', 'green', 'red']
+    labels = []
+
+    ax = axes[0, 0]
+    for i, exp in enumerate(experiments):
+        label = f"Mixup={exp['use_mixup']}, Warmup={exp['use_warmup']}"
+        ax.plot(exp['test_accs'], color=colors[i], label=label, linewidth=2)
+        labels.append(label)
+    ax.set_xlabel('Epoch')
+    ax.set_ylabel('Test Accuracy (%)')
+    ax.set_title('测试准确率对比')
+    ax.legend()
+    ax.grid(True)
+
+    ax = axes[0, 1]
+    for i, exp in enumerate(experiments):
+        ax.plot(exp['train_losses'], color=colors[i], linewidth=2)
+    ax.set_xlabel('Epoch')
+    ax.set_ylabel('Train Loss')
+    ax.set_title('训练损失对比')
+    ax.grid(True)
+
+    ax = axes[1, 0]
+    final_accs = [exp['final_acc'] for exp in experiments]
+    bars = ax.bar(range(len(experiments)), final_accs, color=colors)
+    ax.set_xticks(range(len(experiments)))
+    ax.set_xticklabels(labels, rotation=45, ha='right')
+    ax.set_ylabel('Final Test Accuracy (%)')
+    ax.set_title('最终准确率对比')
+    for bar, acc in zip(bars, final_accs):
+        ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.5,
+                f'{acc:.2f}%', ha='center', va='bottom')
+
+    ax = axes[1, 1]
+    baseline = experiments[0]['final_acc']
+    improvements = [exp['final_acc'] - baseline for exp in experiments[1:]]
+    bars = ax.bar(range(len(improvements)), improvements, 
+                  color=['green' if x > 0 else 'red' for x in improvements])
+    ax.set_xticks(range(len(improvements)))
+    ax.set_xticklabels(labels[1:], rotation=45, ha='right')
+    ax.set_ylabel('Accuracy Improvement (%)')
+    ax.set_title('相比基线的提升幅度')
+    ax.axhline(y=0, color='black', linestyle='-', linewidth=0.5)
+    for bar, imp in zip(bars, improvements):
+        ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + (0.2 if imp > 0 else -0.8),
+                f'{imp:+.2f}%', ha='center', va='bottom' if imp > 0 else 'top')
+    
+    plt.tight_layout()
+    plt.savefig('experiment_comparison.png', dpi=150, bbox_inches='tight')
+    plt.show()
+
+plot_comparison(experiments)
+  *发现Warmup与Mixup两者都能提高精度，但结合起来精度将更高，实践中可达50%~70%以上，主要归功于Mixup对后期过拟合的解决。
+5.由于设备性能，实践中只能采取更加轻量的方案：
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import numpy as np
+
+class BaselineLeNet(nn.Module):
+    def __init__(self, num_classes=10):
+        super(BaselineLeNet, self).__init__()
+        self.conv1 = nn.Conv2d(3, 6, 5)          
+        self.pool1 = nn.MaxPool2d(2, 2)          
+        self.conv2 = nn.Conv2d(6, 16, 5)         
+        self.pool2 = nn.MaxPool2d(2, 2)           
+        self.fc1 = nn.Linear(16 * 5 * 5, 120)     
+        self.fc2 = nn.Linear(120, 84)             
+        self.fc3 = nn.Linear(84, num_classes)    
+    
+    def forward(self, x):
+        x = self.pool1(F.relu(self.conv1(x)))     
+        x = self.pool2(F.relu(self.conv2(x)))   
+        x = x.view(x.size(0), -1)                 
+        x = F.relu(self.fc1(x))
+        x = F.relu(self.fc2(x))
+        x = self.fc3(x)
+        return x
